@@ -1,0 +1,46 @@
+
+@api = http://localhost:5100
+
+### 1. Kiểm tra máy chủ
+GET {{api}}/
+
+### 2. Lấy danh sách sản phẩm
+GET {{api}}/api/products
+
+### 3. Lấy sản phẩm có ID = 1
+GET {{api}}/api/products/1
+
+### 4. Sản phẩm không tồn tại
+GET {{api}}/api/products/999
+
+### 5. ID không đúng định dạng số
+GET {{api}}/api/products/abc
+
+### 6. Tạo sản phẩm hợp lệ
+POST {{api}}/api/products
+Content-Type: application/json
+
+{
+  "name": "Lap trinh gRPC",
+  "description": "Tai lieu bai 5",
+  "price": 80000
+}
+
+### 7. Tạo sản phẩm không hợp lệ
+POST {{api}}/api/products
+Content-Type: application/json
+
+{
+  "name": "San pham loi",
+  "description": "",
+  "price": -1
+}
+
+### 8. Tạo sản phẩm nhưng thiếu Content-Type
+POST {{api}}/api/products
+
+{
+  "name": "Lap trinh gRPC",
+  "description": "Tai lieu bai 5",
+  "price": 80000
+}

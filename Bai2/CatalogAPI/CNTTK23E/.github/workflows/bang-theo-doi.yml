@@ -1,0 +1,95 @@
+# Tạo bảng theo dõi + điểm MỘT LẦN sau hạn chót, lưu ở nhánh "bang-theo-doi"
+# Xem/tải: https://github.com/PTUDPTK23/CNTTK23E/tree/bang-theo-doi
+# Điểm GV nhập tay: sửa file _BangTheoDoi/DiemGV_BaiN.csv (ô trống = dùng điểm máy gợi ý).
+# Tự chạy lúc 00:05 ngày 07/11 (giờ VN) = 17:05 UTC ngày 06/11: chạy thử code SV (job chay-thu) rồi tạo bảng (job cap-nhat).
+# Muốn tạo lại bảng (sau khi merge thêm bài, nhập điểm...): tab Actions -> Run workflow.
+# Bài sau: sửa khối env + dòng cron cho khớp hạn chót mới (cron tính theo giờ UTC = giờ VN - 7).
+name: Bang theo doi nop bai
+on:
+  schedule:
+    - cron: "5 17 11 11 *"
+  workflow_dispatch:
+    inputs:
+      chay_thu:
+        description: "Chạy thử tự động code SV (build + gọi API + chạy client; mất vài chục phút). Bỏ tích = chỉ chấm tĩnh, ra bảng ngay"
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: bang-theo-doi
+  cancel-in-progress: false
+env:
+  BAI: "2"
+  DUNG_HAN: "2026-11-11 12:00"
+  HAN_CHOT: "2026-11-11 23:59"
+jobs:
+  # Job 1: CHẠY CODE CỦA SV -> quyền chỉ-đọc, không lưu token, không dùng secret.
+  # Kết quả chỉ là 1 file JSON số điểm + ghi chú, chuyển sang job 2.
+  chay-thu:
+    if: ${{ github.event_name == 'schedule' || inputs.chay_thu }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Chay thu bai cua SV
+        run: python3 .github/scripts/chay_thu.py . --bai "$BAI" -o /tmp/ketqua_chay.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ketqua-chay
+          path: /tmp/ketqua_chay.json
+          retention-days: 7
+
+  # Job 2: tạo bảng và lưu lên nhánh bang-theo-doi (không chạy code SV)
+  cap-nhat:
+    needs: chay-thu
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install openpyxl==3.1.5
+      - name: Lay ket qua chay thu (neu co)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ketqua-chay
+          path: /tmp/chay
+      - name: Tao bang
+        run: |
+          mkdir -p /tmp/out
+          python .github/scripts/bang_theo_doi.py . --bai "$BAI" --dung-han "$DUNG_HAN" --han "$HAN_CHOT" \
+            --url "https://github.com/${{ github.repository }}" --diem-gv "_BangTheoDoi/DiemGV_Bai${BAI}.csv" --chay-thu /tmp/chay/ketqua_chay.json \
+            -o "/tmp/out/TheoDoi_Bai${BAI}.xlsx"
+          # Bản CSV để so sánh: chỉ lưu khi tình hình nộp bài / điểm thật sự thay đổi
+          python -c "import csv,openpyxl,sys; ws=openpyxl.load_workbook(sys.argv[1]).worksheets[0]; csv.writer(open(sys.argv[2],'w',newline='',encoding='utf-8-sig')).writerows(ws.iter_rows(values_only=True))" \
+            "/tmp/out/TheoDoi_Bai${BAI}.xlsx" "/tmp/out/TheoDoi_Bai${BAI}.csv"
+      # Bảng được lưu ở nhánh riêng "bang-theo-doi" để không vướng luật khóa nhánh main
+      - name: Luu len nhanh bang-theo-doi
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch origin bang-theo-doi; then
+            git worktree add /tmp/bang origin/bang-theo-doi && cd /tmp/bang && git checkout -B bang-theo-doi
+          else
+            git worktree add --detach /tmp/bang && cd /tmp/bang && git checkout --orphan bang-theo-doi && git rm -rfq .
+          fi
+          cp /tmp/out/* .
+          git add -A
+          if git diff --cached --quiet -- "TheoDoi_Bai${BAI}.csv"; then echo "Khong co thay doi"; exit 0; fi
+          git commit -m "Cap nhat bang theo doi Bai ${BAI}"
+          git push origin bang-theo-doi

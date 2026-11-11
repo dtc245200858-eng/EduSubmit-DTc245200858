@@ -1,0 +1,64 @@
+# Đặt file này tại .github/workflows/han-nop.yml trong repo lớp.
+# Mỗi khi SV mở hoặc cập nhật Pull Request, GitHub tự so giờ với hạn nộp:
+#   - trước mốc đúng hạn  -> nhãn "Đúng hạn"
+#   - giữa hai mốc        -> nhãn "Muộn"
+#   - sau hạn chót        -> nhãn "Quá hạn"; PR MỚI mở sau hạn chót bị đóng tự động (đóng link nộp),
+#     PR cũ được đẩy thêm sau hạn chót -> bình luận cảnh báo, GV quyết định
+# Bài nào lấy theo tiêu đề PR: "Bai1 - MSSV - Họ tên", "Bai2 - ...".
+# Đổi hạn: chỉ cần sửa khối HAN bên dưới (giờ Việt Nam, +07:00).
+name: Kiem tra han nop
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+permissions:
+  pull-requests: write
+  issues: write
+jobs:
+  han-nop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          HAN: |
+            {
+              "2": { "dung_han": "2026-11-11T12:00:00+07:00", "han_chot": "2026-11-11T23:59:59+07:00" }
+            }
+        with:
+          script: |
+            const han = JSON.parse(process.env.HAN);
+            const pr = context.payload.pull_request;
+            // PR tạo từ chính repo lớp (của giảng viên) thì bỏ qua, chỉ kiểm tra bài nộp từ fork
+            if (pr.head.repo && pr.head.repo.full_name === pr.base.repo.full_name) return;
+            const m = pr.title.match(/b[aà]i\s*(?:t[aậ]p)?\s*0?(\d+)/i);
+            if (!m || !han[m[1]]) {
+              if (context.payload.action === "synchronize") return;   // không nhắc lại mỗi lần đẩy thêm code
+              await github.rest.issues.createComment({ ...context.repo, issue_number: pr.number,
+                body: "Tiêu đề PR cần theo mẫu `Bai1 - MSSV - Họ tên` để hệ thống tính hạn nộp." });
+              return;
+            }
+            const bai = m[1], now = new Date();
+            const nhan = now <= new Date(han[bai].dung_han) ? "Đúng hạn"
+                       : now <= new Date(han[bai].han_chot) ? "Muộn" : "Quá hạn";
+            for (const [ten, mau] of [["Đúng hạn","2da44e"],["Muộn","fbca04"],["Quá hạn","d73a4a"]]) {
+              try { await github.rest.issues.createLabel({ ...context.repo, name: ten, color: mau }); } catch (e) {}
+            }
+            const cu = pr.labels.map(l => l.name).filter(n => ["Đúng hạn","Muộn","Quá hạn"].includes(n));
+            const thuTu = ["Đúng hạn","Muộn","Quá hạn"];
+            // Nhãn chỉ "xấu đi": đã muộn thì không quay lại đúng hạn
+            const xauNhat = [...cu, nhan].sort((a,b) => thuTu.indexOf(b) - thuTu.indexOf(a))[0];
+            for (const n of cu) if (n !== xauNhat)
+              await github.rest.issues.removeLabel({ ...context.repo, issue_number: pr.number, name: n });
+            await github.rest.issues.addLabels({ ...context.repo, issue_number: pr.number, labels: [xauNhat] });
+            if (nhan === "Quá hạn" && context.payload.action !== "edited") {
+              const gio = now.toLocaleString("vi-VN",{timeZone:"Asia/Ho_Chi_Minh"});
+              // GV tự mở lại PR (người thao tác không phải SV) thì không đóng nữa
+              if (context.payload.sender.login !== pr.user.login) return;
+              if (context.payload.action === "synchronize") {
+                await github.rest.issues.createComment({ ...context.repo, issue_number: pr.number,
+                  body: `Bài ${bai} được cập nhật lúc ${gio}, sau hạn chót. Phần cập nhật này tính là QUÁ HẠN; giảng viên sẽ quyết định có chấm hay không.` });
+                return;
+              }
+              await github.rest.issues.createComment({ ...context.repo, issue_number: pr.number,
+                body: `Bài ${bai} gửi lúc ${gio}, sau hạn chót nên không được nhận. Pull Request này đã được đóng tự động. Nếu có lý do chính đáng, liên hệ giảng viên.` });
+              await github.rest.pulls.update({ ...context.repo, pull_number: pr.number, state: "closed" });
+            }
